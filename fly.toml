@@ -1,0 +1,17 @@
+app = "bot-overgear"
+primary_region = "gru"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  LOG_LEVEL = "INFO"
+  TARGET_BOT = "mythic_queue_bot"
+  QUEUE_DURATION_MINUTES = "30"
+  WORKER_START = "05:00"
+  WORKER_STOP = "23:00"
+  WORKER_WINDOW_SECONDS = "300"
+  WORKER_TZ_OFFSET_HOURS = "-3"
+
+[processes]
+  app = "uv run --frozen --no-dev bot-overgear worker"
