@@ -20,6 +20,7 @@ import asyncio
 import logging
 import time
 from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
@@ -43,6 +44,55 @@ DATA_RECONFIRM_NO = b"QCHK|N"
 
 def data_for_duration(minutes: int) -> bytes:
     return f"timer-{minutes}".encode()
+
+
+# --- Pure action classification ----------------------------------------
+
+
+@dataclass(frozen=True)
+class Action:
+    """Pure description of a button click action."""
+    data: bytes
+    label: str
+
+
+def classify_message(
+    settings: Settings,
+    text: str,
+    button_data: list[bytes],
+) -> Action | None:
+    """Decide what action to take given message text and available buttons.
+
+    Pure function — no IO, no side effects.
+    """
+    # 1. "Are you still here?" reconfirmation — highest priority
+    if DATA_RECONFIRM_YES in button_data:
+        return Action(data=DATA_RECONFIRM_YES, label="Yes (queue check)")
+
+    # 2. Time selection — control panel asking which duration
+    if data_for_duration(settings.queue_duration_minutes) in button_data and (
+        "Select how long" in text or "stay in the queue" in text
+    ):
+        return Action(
+            data=data_for_duration(settings.queue_duration_minutes),
+            label=f"Timer {settings.queue_duration_minutes}m",
+        )
+
+    # 3. Idle / not in queue — kick off
+    if DATA_QUEUE_UP in button_data and "not in the queue" in text:
+        return Action(data=DATA_QUEUE_UP, label="Queue up")
+
+    # 4. In queue — nothing to do
+    if DATA_LEAVE_QUEUE in button_data and "in the queue" in text:
+        return None
+
+    # 5. Heads-up / queued-up notifications: pure info
+    if "Heads up" in text:
+        return None
+    if "queued up" in text.lower():
+        return None
+
+    return None
 
 
 # --- Helpers -----------------------------------------------------------
@@ -104,12 +154,18 @@ _click_cache = _ClickCache()
 # --- Action ------------------------------------------------------------
 
 
-async def click(message: Message, data: bytes, label: str) -> bool:
+async def click(
+    message: Message,
+    data: bytes,
+    label: str,
+    click_cache: _ClickCache | None = None,
+) -> bool:
     """Click an inline button on `message` by callback data. Idempotent."""
+    cache = click_cache if click_cache is not None else _click_cache
     if not has_callback(message, data):
         log.debug("Skip click %s: button data=%r not on msg %s", label, data, message.id)
         return False
-    if not _click_cache.should_click(message.id, data):
+    if not cache.should_click(message.id, data):
         log.debug("Skip click %s: debounced for msg %s", label, message.id)
         return False
 
@@ -128,40 +184,13 @@ async def click(message: Message, data: bytes, label: str) -> bool:
 async def react_to_message(settings: Settings, message: Message) -> None:
     """Inspect a message and click the right button if it matches a known state."""
     text = message.text or ""
-
-    # 1. "Are you still here?" reconfirmation — highest priority
-    if has_callback(message, DATA_RECONFIRM_YES):
-        await click(message, DATA_RECONFIRM_YES, "Yes (queue check)")
-        return
-
-    # 2. Time selection — control panel asking which duration
-    if has_callback(message, data_for_duration(settings.queue_duration_minutes)) and (
-        "Select how long" in text or "stay in the queue" in text
-    ):
-        await click(
-            message,
-            data_for_duration(settings.queue_duration_minutes),
-            f"Timer {settings.queue_duration_minutes}m",
-        )
-        return
-
-    # 3. Idle / not in queue — kick off
-    if has_callback(message, DATA_QUEUE_UP) and "not in the queue" in text:
-        await click(message, DATA_QUEUE_UP, "Queue up")
-        return
-
-    # 4. In queue — nothing to do, just log
-    if has_callback(message, DATA_LEAVE_QUEUE) and "in the queue" in text:
-        log.info("Status: in queue (msg %s).", message.id)
-        return
-
-    # 5. Heads-up / queued-up notifications: pure info
-    if "Heads up" in text:
-        log.info("Heads up received (msg %s).", message.id)
-        return
-    if "queued up" in text.lower():
-        log.info("Queue confirmation: %s", text.replace("\n", " | "))
-        return
+    buttons = [
+        btn.data for btn in _markup_buttons(message)
+        if isinstance(btn, KeyboardButtonCallback)
+    ]
+    action = classify_message(settings, text, buttons)
+    if action is not None:
+        await click(message, action.data, action.label)
 
 
 # --- Bootstrap ---------------------------------------------------------

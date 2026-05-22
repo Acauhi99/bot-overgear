@@ -141,6 +141,13 @@ async def run_worker(settings: Settings) -> None:
             except Exception:
                 log.exception("Boot ensure_left_queue failed")
 
+        now_local = datetime.now(schedule.tz)
+        start_actual = schedule.start_for(now_local.date())
+        log.info("Today's arm window opens at %s", _format_local(start_actual, schedule.tz))
+        stop_actual = schedule.stop_for(now_local.date())
+        if stop_actual:
+            log.info("Today's disarm window opens at %s", _format_local(stop_actual, schedule.tz))
+
         scheduler_task = asyncio.create_task(
             _schedule_loop(settings, client, schedule, armed_state),
             name="bot-overgear-scheduler",

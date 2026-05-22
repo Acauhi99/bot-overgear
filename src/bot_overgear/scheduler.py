@@ -99,11 +99,22 @@ class WorkerSchedule:
             tz=self.tz,
         )
 
+    def _stop_date(self, start_date: date) -> date:
+        """Return the calendar date of the stop paired with *start_date*.
+
+        When ``stop_anchor <= start_anchor`` the stop occurs on the
+        *following* day (overnight schedule, e.g. start 05:00 → stop 01:00).
+        When ``stop_anchor > start_anchor`` both events live on the same day.
+        """
+        if self.stop_anchor is None or self.stop_anchor > self.start_anchor:
+            return start_date
+        return start_date + timedelta(days=1)
+
     def stop_for(self, on_date: date) -> datetime | None:
         if self.stop_anchor is None:
             return None
         return event_time_for(
-            on_date,
+            self._stop_date(on_date),
             self.stop_anchor,
             "stop",
             account_id=self.account_id,
@@ -112,7 +123,11 @@ class WorkerSchedule:
         )
 
     def is_armed(self, now_utc: datetime) -> bool:
-        """True iff `now` is inside today's [start, stop) window."""
+        """True iff *now* falls inside the [start, stop) window.
+
+        Supports overnight windows (stop ≤ start) — when that happens the
+        stop event falls on the next calendar day.
+        """
         now_local = now_utc.astimezone(self.tz)
         start_today = self.start_for(now_local.date())
         if now_local < start_today:
@@ -126,10 +141,11 @@ class WorkerSchedule:
         """Return (when_utc, kind) — the next scheduled action.
 
         Logic:
-          - If now < today's start  -> ("start", today's start)
-          - Else if armed and stop_anchor set and now < today's stop
-                                    -> ("stop",  today's stop)
-          - Else                    -> ("start", tomorrow's start)
+          - If now < today's start   → (today's start, "start")
+          - If now < paired stop     → (paired stop,   "stop")
+          - Else                     → (tomorrow's start, "start")
+
+        The *paired stop* may be on the next day (overnight schedule).
         """
         now_local = now_utc.astimezone(self.tz)
         today = now_local.date()

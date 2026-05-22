@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import time
 from pathlib import Path
@@ -41,16 +42,6 @@ class Settings:
         return bool(self.session_string)
 
 
-def _require(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
-        raise RuntimeError(
-            f"Missing required env var {name!r}. "
-            f"Copy .env.example to .env and fill it in."
-        )
-    return value
-
-
 def _parse_int(name: str, value: str) -> int:
     try:
         return int(value)
@@ -79,55 +70,76 @@ def _parse_time(name: str, value: str) -> time:
         raise RuntimeError(f"Env var {name!r} has invalid hour/minute/second: {value!r}") from exc
 
 
-def load_settings() -> Settings:
-    """Load and validate settings from the process environment.
+def _required(name: str, env: Mapping[str, str]) -> str:
+    """Get a required env var or raise."""
+    value = env.get(name, "").strip()
+    if not value:
+        raise RuntimeError(
+            f"Missing required env var {name!r}. "
+            f"Copy .env.example to .env and fill it in."
+        )
+    return value
 
-    Reads `.env` from the current working directory if present.
+
+def parse_settings(env: Mapping[str, str]) -> Settings:
+    """Pure: parse and validate settings from a dict (e.g. os.environ).
+
+    No IO, no dotenv. All validation logic lives here.
     """
-    load_dotenv(override=False)
-
-    api_id = _parse_int("TG_API_ID", _require("TG_API_ID"))
-    api_hash = _require("TG_API_HASH")
-    phone = os.environ.get("TG_PHONE", "").strip() or None
-    password = os.environ.get("TG_PASSWORD", "")
+    api_id = _parse_int("TG_API_ID", _required("TG_API_ID", env))
+    api_hash = _required("TG_API_HASH", env)
+    phone = env.get("TG_PHONE", "").strip() or None
+    password = env.get("TG_PASSWORD", "")
     # Note: deliberately do NOT .strip() the password — Telegram allows
     # leading/trailing whitespace in 2FA passwords.
     password = password if password != "" else None
-    session_string = os.environ.get("TG_SESSION_STRING", "").strip() or None
+    session_string = env.get("TG_SESSION_STRING", "").strip() or None
 
-    target_bot = os.environ.get("TARGET_BOT", "mythic_queue_bot").strip().lstrip("@")
+    target_bot = env.get("TARGET_BOT", "mythic_queue_bot").strip().lstrip("@")
     duration = _parse_int(
         "QUEUE_DURATION_MINUTES",
-        os.environ.get("QUEUE_DURATION_MINUTES", "30"),
+        env.get("QUEUE_DURATION_MINUTES", "30"),
     )
     if duration not in VALID_DURATIONS:
         raise RuntimeError(
             f"QUEUE_DURATION_MINUTES must be one of {VALID_DURATIONS}, got {duration}"
         )
-    session_name = os.environ.get("SESSION_NAME", "bot_overgear").strip() or "bot_overgear"
-    log_level = os.environ.get("LOG_LEVEL", "INFO").strip().upper() or "INFO"
+    session_name = env.get("SESSION_NAME", "bot_overgear").strip() or "bot_overgear"
+    log_level = env.get("LOG_LEVEL", "INFO").strip().upper() or "INFO"
 
-    worker_start = _parse_time("WORKER_START", os.environ.get("WORKER_START", "05:00"))
-    raw_stop = os.environ.get("WORKER_STOP", "").strip()
+    worker_start = _parse_time("WORKER_START", env.get("WORKER_START", "05:00"))
+    raw_stop = env.get("WORKER_STOP", "").strip()
     worker_stop = _parse_time("WORKER_STOP", raw_stop) if raw_stop else None
     worker_window_seconds = _parse_int(
-        "WORKER_WINDOW_SECONDS", os.environ.get("WORKER_WINDOW_SECONDS", "300")
+        "WORKER_WINDOW_SECONDS", env.get("WORKER_WINDOW_SECONDS", "300")
     )
     if worker_window_seconds < 1:
         raise RuntimeError("WORKER_WINDOW_SECONDS must be >= 1")
     worker_tz_offset_hours = _parse_float(
-        "WORKER_TZ_OFFSET_HOURS", os.environ.get("WORKER_TZ_OFFSET_HOURS", "-3")
+        "WORKER_TZ_OFFSET_HOURS", env.get("WORKER_TZ_OFFSET_HOURS", "-3")
     )
 
     if worker_stop is not None:
-        # Sanity: stop must be strictly after start within the same local day,
-        # with at least `window` seconds of gap so the offsets can't collide.
         start_secs = worker_start.hour * 3600 + worker_start.minute * 60 + worker_start.second
         stop_secs = worker_stop.hour * 3600 + worker_stop.minute * 60 + worker_stop.second
-        if stop_secs - start_secs <= worker_window_seconds:
+
+        if stop_secs == start_secs:
             raise RuntimeError(
-                f"WORKER_STOP ({worker_stop}) must be at least "
-                f"{worker_window_seconds}s after WORKER_START ({worker_start})."
+                f"WORKER_STOP ({worker_stop}) equals WORKER_START ({worker_start}). "
+                f"Leave WORKER_STOP empty for no-stop, or choose a different time."
+            )
+
+        if stop_secs > start_secs:
+            gap = stop_secs - start_secs
+        else:
+            gap = 86400 - start_secs + stop_secs  # overnight
+
+        if gap <= worker_window_seconds:
+            raise RuntimeError(
+                f"Gap between WORKER_START ({worker_start}) and "
+                f"WORKER_STOP ({worker_stop}) is only {gap}s, but "
+                f"WORKER_WINDOW_SECONDS={worker_window_seconds}s. "
+                f"Gap must be larger than the window."
             )
 
     return Settings(
@@ -145,6 +157,12 @@ def load_settings() -> Settings:
         worker_window_seconds=worker_window_seconds,
         worker_tz_offset_hours=worker_tz_offset_hours,
     )
+
+
+def load_settings() -> Settings:
+    """Load and validate settings from the process environment."""
+    load_dotenv(override=False)
+    return parse_settings(os.environ)
 
 
 def configure_logging(level: str) -> None:
