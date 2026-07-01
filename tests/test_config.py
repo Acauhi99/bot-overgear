@@ -167,6 +167,15 @@ class TestParseSettings:
         assert settings.worker_start == time(23, 0)
         assert settings.worker_stop == time(0, 30)
 
+    @pytest.mark.parametrize("sentinel", ["off", "OFF", "Off", "none", "None", "NONE"])
+    def test_stop_sentinel_means_no_stop(self, sentinel: str) -> None:
+        settings = parse_settings({
+            **_ENV_MINIMAL,
+            "WORKER_START": "05:00",
+            "WORKER_STOP": sentinel,
+        })
+        assert settings.worker_stop is None
+
     def test_load_settings_smoke(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TG_API_ID", "456")
         monkeypatch.setenv("TG_API_HASH", "smoke")

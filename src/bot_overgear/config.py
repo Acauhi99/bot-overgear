@@ -109,7 +109,12 @@ def parse_settings(env: Mapping[str, str]) -> Settings:
 
     worker_start = _parse_time("WORKER_START", env.get("WORKER_START", "05:00"))
     raw_stop = env.get("WORKER_STOP", "").strip()
-    worker_stop = _parse_time("WORKER_STOP", raw_stop) if raw_stop else None
+    # Sentinels: empty, "off", "none" (any case) → 24/7 mode (no stop).
+    # Useful for Fly.io secrets UI, which doesn't allow empty values.
+    if raw_stop and raw_stop.lower() not in ("off", "none"):
+        worker_stop = _parse_time("WORKER_STOP", raw_stop)
+    else:
+        worker_stop = None
     worker_window_seconds = _parse_int(
         "WORKER_WINDOW_SECONDS", env.get("WORKER_WINDOW_SECONDS", "300")
     )

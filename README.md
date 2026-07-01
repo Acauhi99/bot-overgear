@@ -165,15 +165,19 @@ All settings are environment variables (see `.env.example`):
 | `TARGET_BOT`              | optional  | Bot username, default `mythic_queue_bot`                                |
 | `QUEUE_DURATION_MINUTES`  | optional  | One of `30/60/90/120`. Default `30`                                     |
 | `WORKER_START`            | optional  | Worker local start anchor, `HH:MM` or `HH:MM:SS`. Default `05:00`        |
-| `WORKER_STOP`             | optional  | Worker local stop anchor. Recommended for scheduled deploys              |
+| `WORKER_STOP`             | optional  | Worker local stop anchor, or `off`/`none`/empty for 24/7 mode (always armed) |
 | `WORKER_WINDOW_SECONDS`   | optional  | Deterministic jitter window in seconds. Default `300`                    |
 | `WORKER_TZ_OFFSET_HOURS`  | optional  | Fixed timezone offset for worker anchors. Default `-3`                   |
 | `SESSION_NAME`            | optional  | File-session basename. Ignored when `TG_SESSION_STRING` is set          |
 | `LOG_LEVEL`               | optional  | `DEBUG`, `INFO`, `WARNING`, `ERROR`. Default `INFO`                     |
 
-`WORKER_STOP`, when set, must be after `WORKER_START` on the same local day,
-with at least `WORKER_WINDOW_SECONDS` of gap so start/stop jitter cannot
-collide.
+`WORKER_STOP`, when set to a time, must be after `WORKER_START` on the same
+local day, with at least `WORKER_WINDOW_SECONDS` of gap so start/stop jitter
+cannot collide. Set `WORKER_STOP` to empty/`off`/`none` for **24/7 mode** —
+the bot stays armed forever and never leaves the queue. The sentinel matters
+on hosts (e.g. Fly.io secrets UI) that don't allow empty values: from there,
+just `fly secrets set WORKER_STOP=off` to flip into 24/7, or back to a `HH:MM`
+value to re-enable the daily start/stop window — no redeploy.
 
 ## Autonomous deploy recipe (e.g. VPS)
 
